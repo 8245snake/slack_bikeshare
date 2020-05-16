@@ -18,9 +18,11 @@ import (
 )
 
 //環境変数
-var BotToken = os.Getenv("SLACK_TOKEN")
-var VerifyToken = os.Getenv("SLACK_VERIFY")
-var Secretoken = os.Getenv("SLACK_SECRET")
+var (
+	BotToken    = os.Getenv("SLACK_TOKEN")
+	VerifyToken = os.Getenv("SLACK_VERIFY")
+	Secretoken  = os.Getenv("SLACK_SECRET")
+)
 
 // You more than likely want your "Bot User OAuth Access Token" which starts with "xoxb-"
 var api = slack.New(BotToken)
@@ -30,10 +32,16 @@ var bikeAPI = bikeshareapi.NewApiClient()
 
 //EventEndpoint イベントPOSTハンドラ
 func EventEndpoint(w http.ResponseWriter, r *http.Request) {
+	retry := r.Header.Get("X-Slack-Retry-Num")
+	if retry != "" {
+		log.Printf("X-Slack-Retry-Num = %s", retry)
+		return
+	}
 	buf := new(bytes.Buffer)
 	buf.ReadFrom(r.Body)
 	body := buf.String()
-	eventsAPIEvent, e := slackevents.ParseEvent(json.RawMessage(body), slackevents.OptionVerifyToken(&slackevents.TokenComparator{VerificationToken: VerifyToken}))
+	eventsAPIEvent, e := slackevents.ParseEvent(json.RawMessage(body),
+		slackevents.OptionVerifyToken(&slackevents.TokenComparator{VerificationToken: VerifyToken}))
 	if e != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 	}
@@ -47,39 +55,17 @@ func EventEndpoint(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text")
 		w.Write([]byte(r.Challenge))
 	}
-	if eventsAPIEvent.Type == slackevents.CallbackEvent {
-		innerEvent := eventsAPIEvent.InnerEvent
-		switch ev := innerEvent.Data.(type) {
-		case *slackevents.AppMentionEvent:
-			_, ok := innerEvent.Data.(*slackevents.AppMentionEvent)
-			if !ok {
-				return
-			}
-			api.PostMessage(ev.Channel, slack.MsgOptionText("AppMentionEvent", false))
-		case *slackevents.MessageEvent:
-			_, ok := innerEvent.Data.(*slackevents.MessageEvent)
-			if !ok {
-				return
-			}
-			api.PostMessage(ev.Channel, slack.MsgOptionText("MessageEvent", false))
-		case *slackevents.EventsAPICallbackEvent:
-			_, ok := innerEvent.Data.(*slackevents.MessageEvent)
-			if !ok {
-				return
-			}
-			fmt.Println("EventsAPICallbackEvent")
-		case *slackevents.AppHomeOpenedEvent:
-			if s, ok := innerEvent.Data.(*slackevents.AppHomeOpenedEvent); ok {
-				AppHomeOpened(s)
-			}
-		}
-
-	}
+	go EventHandler(&eventsAPIEvent)
+	w.WriteHeader(http.StatusOK)
 }
 
 //InteractiveEndpoint イベントPOSTハンドラ
 func InteractiveEndpoint(w http.ResponseWriter, r *http.Request) {
-
+	retry := r.Header.Get("X-Slack-Retry-Num")
+	if retry != "" {
+		log.Printf("X-Slack-Retry-Num = %s", retry)
+		return
+	}
 	// Read request body
 	defer r.Body.Close()
 	body, err := ioutil.ReadAll(r.Body)
@@ -94,54 +80,27 @@ func InteractiveEndpoint(w http.ResponseWriter, r *http.Request) {
 	str = strings.Replace(str, "payload=", "", 1)
 	var message slack.InteractionCallback
 	if err := json.Unmarshal([]byte(str), &message); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
 		log.Printf("[ERROR] Fail to unmarchal json: %v", err)
 		return
 	}
-
-	switch message.Type {
-	case slack.InteractionTypeShortcut:
-		//ショートカット
-		fmt.Printf("%v\n", message)
-	case slack.InteractionTypeViewSubmission:
-		//確定ボタン
-		for blockID := range message.View.State.Values {
-			//どの画面の確定ボタンかを判別するためにInputブロックのIDを使用
-			switch blockID {
-			case BlcSearch:
-				//駐輪場検索
-				SubmitBikeSearch(message)
-			}
-		}
-	case slack.InteractionTypeBlockActions:
-		//アクションブロック全般
-		for _, blockAction := range message.ActionCallback.BlockActions {
-			switch slack.MessageElementType(blockAction.Type) {
-			case slack.METButton:
-				//ボタン
-				switch blockAction.ActionID {
-				case BlcSearch:
-					//駐輪場検索
-					ShowSearchDialog(message)
-				}
-			case slack.METCheckboxGroups:
-			case slack.METDatepicker:
-			case slack.METImage:
-			case slack.METOverflow:
-			case slack.METPlainTextInput:
-			case slack.METRadioButtons:
-			}
-		}
-	}
+	// fmt.Println(str)
+	go InteractiveHandler(&message)
+	w.WriteHeader(http.StatusOK)
 }
 
 //CommandEndpoint イベントPOSTハンドラ
 func CommandEndpoint(w http.ResponseWriter, r *http.Request) {
+	retry := r.Header.Get("X-Slack-Retry-Num")
+	if retry != "" {
+		log.Printf("X-Slack-Retry-Num = %s", retry)
+		return
+	}
 	verifier, err := slack.NewSecretsVerifier(r.Header, Secretoken)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-
 	r.Body = ioutil.NopCloser(io.TeeReader(r.Body, &verifier))
 	command, err := slack.SlashCommandParse(r)
 	if err != nil {
@@ -153,19 +112,8 @@ func CommandEndpoint(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
-
-	if command.Command != "/bikeshare" {
-		w.WriteHeader(http.StatusForbidden)
-		return
-	}
-
-	switch command.Text {
-	case "line login":
-		LoginLine(command, w)
-	default:
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
+	CommandHandler(command, w)
+	w.WriteHeader(http.StatusOK)
 }
 
 func main() {

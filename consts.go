@@ -14,9 +14,15 @@ const BtnOpenSearchDialog string = "btn_open_searchdialog"
 //BlcSearch 検索
 const BlcSearch string = "Blc_search"
 
+//BlcDetail 詳細
+const BlcDetail string = "Blc_detail"
+
 ////////////////////////////////////////////////////////////////////////
 // actionID用定数
 ////////////////////////////////////////////////////////////////////////
 
 //ActSearch 検索
 const ActSearch string = "act_search"
+
+//ActDetail 詳細
+const ActDetail string = "act_detail"

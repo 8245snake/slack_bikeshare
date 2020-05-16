@@ -11,6 +11,19 @@ import (
 	"github.com/slack-go/slack"
 )
 
+//CommandHandler ハンドラ
+func CommandHandler(command slack.SlashCommand, w http.ResponseWriter) {
+
+	if command.Command != "/bikeshare" {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+	switch command.Text {
+	case "line login":
+		LoginLine(command, w)
+	}
+}
+
 //LoginLine LINEユーザーと紐付ける
 func LoginLine(command slack.SlashCommand, w http.ResponseWriter) {
 	rand.Seed(time.Now().UnixNano())

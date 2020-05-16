@@ -2,10 +2,15 @@ package main
 
 import (
 	"fmt"
+	"strings"
+	"time"
 
 	bikeshareapi "github.com/8245snake/bikeshare-client"
 	"github.com/slack-go/slack"
 )
+
+//WeekDays 曜日
+var WeekDays = [7]string{"日", "月", "火", "水", "木", "金", "土"}
 
 //MakeHomeViewTest 実験
 func MakeHomeViewTest() slack.HomeTabViewRequest {
@@ -98,6 +103,59 @@ func MakeSearchDialog() slack.ModalViewRequest {
 	return view
 }
 
+//MakeDetailDialog 検索画面作成
+func MakeDetailDialog(portCode string) slack.ModalViewRequest {
+	multi := slack.NewOptionsMultiSelectBlockElement("multi_static_select", slack.NewTextBlockObject("plain_text", "日付選択（複数）", false, false), "")
+	day := time.Now()
+	for i := 0; i < 30; i++ {
+		value := portCode + "_" + day.Format("20060102")
+		multi.Options = append(multi.Options, slack.NewOptionBlockObject(value, CreatePlainText(fmt.Sprintf("%s (%s)", day.Format("2006/01/02"), WeekDays[day.Weekday()]))))
+		day = day.AddDate(0, 0, -1)
+	}
+	inputBlock := slack.NewInputBlock(BlcDetail, CreatePlainText("グラフを表示する日付を選択してください（最大３つ）"), multi)
+	//画像セクション
+	area, spot := SplitAreaSpotCode(portCode)
+	graph, _ := bikeAPI.GetGraph(
+		bikeshareapi.SearchGraphOption{
+			Area:      area,
+			Spot:      spot,
+			DrawTitle: true,
+			Days:      []string{time.Now().Format("20060102")},
+		})
+	pictureBlock := slack.NewImageBlock(graph.URL, "画像のツールチップ", "",
+		CreatePlainText("台数の経時変化"))
+	//リクエスト
+	view := slack.ModalViewRequest{
+		Type:   slack.VTModal,
+		Title:  CreatePlainText("駐輪場検索"),
+		Blocks: slack.Blocks{BlockSet: []slack.Block{inputBlock, pictureBlock}},
+		Submit: CreatePlainText("検索"),
+		Close:  CreatePlainText("閉じる"),
+	}
+	return view
+}
+
+//MakeDetailView 検索結果画面
+func MakeDetailView(area string, spot string, days []string) slack.HomeTabViewRequest {
+	searchBlock := CreateSearchFrame()
+	//画像セクション
+	graph, _ := bikeAPI.GetGraph(
+		bikeshareapi.SearchGraphOption{
+			Area:      area,
+			Spot:      spot,
+			DrawTitle: true,
+			Days:      days,
+		})
+	pictureBlock := slack.NewImageBlock(graph.URL, "画像のツールチップ", "",
+		CreatePlainText("台数の経時変化"))
+	blockSet := []slack.Block{searchBlock, pictureBlock}
+	view := slack.HomeTabViewRequest{
+		Type:   slack.VTHomeTab,
+		Blocks: slack.Blocks{BlockSet: blockSet},
+	}
+	return view
+}
+
 //MakeSearchResultView 検索結果画面
 func MakeSearchResultView(spotinfoList []bikeshareapi.SpotInfo) slack.HomeTabViewRequest {
 	block := CreateSearchFrame()
@@ -114,9 +172,9 @@ func MakeSearchResultView(spotinfoList []bikeshareapi.SpotInfo) slack.HomeTabVie
 
 		txtBlock := CreateMarkdownText(text)
 		frame := slack.NewSectionBlock(nil, []*slack.TextBlockObject{txtBlock}, nil)
-		// //将来的には詳細ボタンを出したい
-		// button := slack.NewAccessory(slack.NewButtonBlockElement(BlcSearch, BtnOpenSearchDialog, CreatePlainText("詳細")))
-		// frame.Accessory = button
+		//詳細ボタン
+		button := slack.NewAccessory(slack.NewButtonBlockElement(ActDetail, info.Area+"-"+info.Spot, CreatePlainText("詳細")))
+		frame.Accessory = button
 		blockSet = append(blockSet, frame)
 		if context != "" {
 			blockSet = append(blockSet, slack.NewContextBlock("", CreateMarkdownText(context)))
@@ -152,4 +210,15 @@ func CreatePlainText(text string) *slack.TextBlockObject {
 //CreateMarkdownText マークダウン
 func CreateMarkdownText(text string) *slack.TextBlockObject {
 	return slack.NewTextBlockObject("mrkdwn", text, false, false)
+}
+
+//SplitAreaSpotCode コードをareaとspotに分離
+func SplitAreaSpotCode(portCode string) (area, spot string) {
+	arr := strings.Split(portCode, "-")
+	if len(arr) < 2 {
+		return
+	}
+	area = arr[0]
+	spot = arr[1]
+	return
 }
